@@ -47,8 +47,9 @@ to GitHub's blob store. This action writes to devino instead.
    artifacts of the run, and extracts safely into `path`.
 
 Retention is enforced by bucket lifecycle rules: `retention-days` is rounded
-up to 1/3/5/7/14/30 days and stored as an object tag; anything else expires
-after 90 days.
+up to 1/3/5/7/14/30/90 days and stored as an object tag (values above 90 are
+capped at 90). When `retention-days` is not set the artifact expires after
+14 days, which matches how the org's test reports and screenshots are used.
 
 ## Inputs
 

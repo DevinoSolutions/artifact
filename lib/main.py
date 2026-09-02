@@ -37,7 +37,7 @@ DEFAULT_ROLE_ARN = ""
 DEFAULT_AUDIENCE = "storage.devino.ca"
 # Lifecycle rules on the bucket expire objects tagged retention=<N> after N
 # days; untagged objects expire after 90 days (same default as GitHub).
-RETENTION_BUCKETS = [1, 3, 5, 7, 14, 30]
+RETENTION_BUCKETS = [1, 3, 5, 7, 14, 30, 90]
 GLOB_CHARS = set("*?[")
 
 
@@ -355,7 +355,7 @@ def retention_tag(days):
     for b in RETENTION_BUCKETS:
         if n <= b:
             return b
-    return None  # > 30 days: bucket default (90)
+    return RETENTION_BUCKETS[-1]  # > 90 days: cap at the longest rule
 
 
 def do_upload():
