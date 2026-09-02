@@ -32,8 +32,9 @@ to GitHub's blob store. This action writes to devino instead.
 ## How it works
 
 1. The job's GitHub OIDC token (audience `storage.devino.ca`) is exchanged with
-   MinIO STS (`AssumeRoleWithWebIdentity`) for one-hour credentials. MinIO only
-   accepts tokens whose `sub` matches `repo:DevinoSolutions/*`.
+   MinIO STS (`AssumeRoleWithWebIdentity`) for one-hour credentials. MinIO picks the policy named after the token's
+   `repository_owner_id` claim, so only workflows owned by DevinoSolutions get
+   access; tokens from any other owner map to no policy and are refused.
 2. A pinned `mc` (MinIO client) is fetched from `storage.devino.ca/tools/`
    (fallback: dl.min.io) and cached in the runner tool cache.
 3. Upload: matched files are packed into one `.tgz` whose root mirrors

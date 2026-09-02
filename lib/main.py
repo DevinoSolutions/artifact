@@ -31,7 +31,9 @@ import urllib.request
 MC_VERSION = "RELEASE.2025-08-13T08-35-41Z"
 DEFAULT_ENDPOINT = "https://storage.devino.ca"
 DEFAULT_BUCKET = "gh-artifacts"
-DEFAULT_ROLE_ARN = "arn:minio:iam:::role/8Za7dG17v6NWmxDtC1fJ7AOW6xI"
+# MinIO maps the token's repository_owner_id claim to a policy of the same name
+# (claim-based mode), so no RoleArn is sent unless one is configured.
+DEFAULT_ROLE_ARN = ""
 DEFAULT_AUDIENCE = "storage.devino.ca"
 # Lifecycle rules on the bucket expire objects tagged retention=<N> after N
 # days; untagged objects expire after 90 days (same default as GitHub).
@@ -196,15 +198,15 @@ class Store(object):
             jwt = json.loads(http(req, timeout=60).decode("utf-8"))["value"]
         except Exception as e:  # noqa: BLE001
             fail("Could not obtain the GitHub OIDC token: %s" % e)
-        data = urllib.parse.urlencode(
-            {
-                "Action": "AssumeRoleWithWebIdentity",
-                "Version": "2011-06-15",
-                "DurationSeconds": "3600",
-                "RoleArn": role_arn,
-                "WebIdentityToken": jwt,
-            }
-        ).encode("utf-8")
+        params = {
+            "Action": "AssumeRoleWithWebIdentity",
+            "Version": "2011-06-15",
+            "DurationSeconds": "3600",
+            "WebIdentityToken": jwt,
+        }
+        if role_arn:
+            params["RoleArn"] = role_arn
+        data = urllib.parse.urlencode(params).encode("utf-8")
         req = urllib.request.Request(
             self.endpoint + "/", data=data, headers={"Content-Type": "application/x-www-form-urlencoded"}
         )
