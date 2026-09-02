@@ -1,0 +1,69 @@
+name: "Devino artifact download"
+description: "Drop-in replacement for actions/download-artifact that fetches artifacts from Devino's self-hosted MinIO (storage.devino.ca) using the job's GitHub OIDC token."
+author: DevinoSolutions
+branding:
+  icon: download-cloud
+  color: blue
+
+inputs:
+  name:
+    description: "Artifact name. When omitted, all artifacts of the run (or those matching 'pattern') are downloaded."
+    default: ""
+  path:
+    description: "Destination directory (defaults to $GITHUB_WORKSPACE)"
+    default: ""
+  pattern:
+    description: "Glob matching artifact names to download (when 'name' is omitted)"
+    default: ""
+  merge-multiple:
+    description: "Extract every matched artifact into 'path' instead of a sub-directory per artifact"
+    default: "false"
+  run-id:
+    description: "Workflow run to download from (defaults to the current run)"
+    default: ""
+  repository:
+    description: "owner/repo to download from (defaults to the current repository)"
+    default: ""
+  github-token:
+    description: "Accepted for compatibility; not needed."
+    default: ""
+  artifact-ids:
+    description: "Accepted for compatibility; not supported."
+    default: ""
+  endpoint:
+    description: "S3 endpoint (defaults to https://storage.devino.ca)"
+    default: ""
+  bucket:
+    description: "Bucket name (defaults to gh-artifacts)"
+    default: ""
+  access-key:
+    description: "Static access key (optional; OIDC is used when omitted)"
+    default: ""
+  secret-key:
+    description: "Static secret key (optional; OIDC is used when omitted)"
+    default: ""
+
+outputs:
+  download-path:
+    description: "Absolute path where the artifact(s) were extracted"
+    value: ${{ steps.download.outputs.download-path }}
+
+runs:
+  using: composite
+  steps:
+    - id: download
+      shell: bash
+      env:
+        INPUT_NAME: ${{ inputs.name }}
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_PATTERN: ${{ inputs.pattern }}
+        INPUT_MERGE_MULTIPLE: ${{ inputs.merge-multiple }}
+        INPUT_RUN_ID: ${{ inputs.run-id }}
+        INPUT_REPOSITORY: ${{ inputs.repository }}
+        INPUT_ENDPOINT: ${{ inputs.endpoint }}
+        INPUT_BUCKET: ${{ inputs.bucket }}
+        INPUT_ACCESS_KEY: ${{ inputs.access-key }}
+        INPUT_SECRET_KEY: ${{ inputs.secret-key }}
+      run: |
+        if [ "$RUNNER_OS" = "Windows" ]; then PY=python; else PY="$(command -v python3 || command -v python)"; fi
+        exec "$PY" "$GITHUB_ACTION_PATH/../lib/main.py" download

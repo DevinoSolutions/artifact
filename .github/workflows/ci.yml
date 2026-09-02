@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  roundtrip:
+    name: roundtrip (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest, ubuntu-devino]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate fixture data
+        shell: bash
+        run: python3 tests/fixtures.py data "${{ matrix.os }}" || python tests/fixtures.py data "${{ matrix.os }}"
+
+      # 1. single directory: root must be the directory itself, hidden files excluded
+      - name: Upload single directory
+        id: up1
+        uses: ./upload
+        with:
+          name: single-${{ matrix.os }}
+          path: data
+          retention-days: 1
+
+      - name: Download by name
+        uses: ./download
+        with:
+          name: single-${{ matrix.os }}
+          path: out1
+
+      - name: Verify single
+        shell: bash
+        run: python3 tests/verify.py single data out1 || python tests/verify.py single data out1
+
+      # 2. multiple explicit files -> LCA root; include hidden
+      - name: Upload multiple paths
+        uses: ./upload
+        with:
+          name: multi-a-${{ matrix.os }}
+          path: |
+            data/a.txt
+            data/sub/b.bin
+            data/.hidden.txt
+          include-hidden-files: true
+          retention-days: 1
+
+      # 3. glob pattern with exclusion
+      - name: Upload glob
+        uses: ./upload
+        with:
+          name: multi-b-${{ matrix.os }}
+          path: |
+            data/**/*.txt
+            !data/sub/skip.txt
+          retention-days: 1
+
+      - name: Download pattern (merged)
+        uses: ./download
+        with:
+          pattern: multi-*-${{ matrix.os }}
+          merge-multiple: true
+          path: out2
+
+      - name: Download pattern (per-artifact dirs)
+        uses: ./download
+        with:
+          pattern: multi-*-${{ matrix.os }}
+          path: out3
+
+      - name: Verify multi
+        shell: bash
+        run: python3 tests/verify.py multi data out2 out3 "${{ matrix.os }}" || python tests/verify.py multi data out2 out3 "${{ matrix.os }}"
+
+      # 4. if-no-files-found semantics
+      - name: No files (warn)
+        uses: ./upload
+        with:
+          name: none-${{ matrix.os }}
+          path: does-not-exist/**
+
+      - name: No files (error)
+        id: noerr
+        continue-on-error: true
+        uses: ./upload
+        with:
+          name: none-${{ matrix.os }}
+          path: does-not-exist/**
+          if-no-files-found: error
+
+      - name: Assert error outcome
+        shell: bash
+        run: test "${{ steps.noerr.outcome }}" = "failure"
+
+      - name: Download missing artifact fails
+        id: nodl
+        continue-on-error: true
+        uses: ./download
+        with:
+          name: none-${{ matrix.os }}
+
+      - name: Assert download failure
+        shell: bash
+        run: test "${{ steps.nodl.outcome }}" = "failure"
+
+      - name: Outputs are set
+        shell: bash
+        run: |
+          test -n "${{ steps.up1.outputs.artifact-id }}"
+          test -n "${{ steps.up1.outputs.artifact-digest }}"
+
+  cross-job:
+    name: cross-job download
+    needs: roundtrip
+    runs-on: ubuntu-devino
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download every single-* artifact from all OSes
+        uses: ./download
+        with:
+          pattern: single-*
+          path: all
+      - name: Verify all four
+        shell: bash
+        run: |
+          ls -la all
+          for os in ubuntu-latest windows-latest macos-latest ubuntu-devino; do
+            test -f "all/single-$os/a.txt" || { echo "missing $os"; exit 1; }
+          done
