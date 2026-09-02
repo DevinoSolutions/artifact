@@ -95,7 +95,13 @@ def temp_dir():
     return tempfile.mkdtemp(prefix="devino-artifact-", dir=base)
 
 
+USER_AGENT = "devino-artifact/1.0 (+https://github.com/DevinoSolutions/artifact)"
+
+
 def http(req, timeout=120, retries=3):
+    if isinstance(req, str):
+        req = urllib.request.Request(req)
+    req.add_header("User-Agent", USER_AGENT)
     last = None
     for attempt in range(retries):
         try:
