@@ -10,6 +10,14 @@ permissions:
   contents: read
   id-token: write
 
+# The roundtrip matrix includes ubuntu-devino, so without this every push to
+# every branch left a job queued on a saturated self-hosted pool that nothing
+# cancelled. Group name matches the org's prevailing ci.yml style; main is
+# exempt from cancellation so a push there always finishes validating.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   roundtrip:
     name: roundtrip (${{ matrix.os }})
