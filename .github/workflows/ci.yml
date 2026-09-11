@@ -138,3 +138,15 @@ jobs:
           for os in ubuntu-latest windows-latest macos-latest ubuntu-devino; do
             test -f "all/single-$os/a.txt" || { echo "missing $os"; exit 1; }
           done
+
+  unit:
+    # Pure-python, mocks subprocess: no network, no mc, no OIDC, no runner pool.
+    name: unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run unit tests
+        shell: bash
+        run: |
+          PY="$(command -v python3 || command -v python)"
+          "$PY" -m unittest discover -s tests -p "test_*.py" -v

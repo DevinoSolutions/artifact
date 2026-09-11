@@ -17,6 +17,7 @@ import json
 import os
 import pathlib
 import platform
+import random
 import re
 import shutil
 import subprocess
@@ -39,6 +40,16 @@ DEFAULT_AUDIENCE = "storage.devino.ca"
 # days; untagged objects expire after 90 days (same default as GitHub).
 RETENTION_BUCKETS = [1, 3, 5, 7, 14, 30, 90]
 GLOB_CHARS = set("*?[")
+
+# `mc` does not retry, and this action is now on the critical path of required
+# checks in every repository that moved off the GitHub artifact sink. A single
+# TCP reset against the endpoint therefore reds a gate fleet-wide, so transport
+# failures are retried with exponential backoff. MC_ATTEMPTS attempts means
+# MC_ATTEMPTS - 1 waits: 2, 4, 8 and 16 s by default. The 32 s step is only
+# reached if MC_ATTEMPTS is raised.
+MC_ATTEMPTS = 5
+MC_BACKOFF = [2, 4, 8, 16, 32]
+MC_JITTER = 0.25  # +/- 25%, so a fleet-wide blip does not retry in lockstep
 
 
 # ── GitHub Actions helpers ───────────────────────────────────────────────────
@@ -121,6 +132,95 @@ def http(req, timeout=120, retries=3):
 
 
 # ── mc client ────────────────────────────────────────────────────────────────
+# `mc` reports every failure on stderr with the same `mc: <ERROR> ...` shape and
+# exits 1, so the exit code alone cannot tell a missing object from a dead
+# socket. These patterns read the message instead. They are ordered: a DNS
+# failure says "no such host" and must not be read as a missing object, and a
+# 503 must not be read as a permission problem.
+MC_TRANSPORT_RE = re.compile(
+    r"connection reset"
+    r"|connection refused"
+    r"|connection timed out"
+    r"|broken pipe"
+    r"|i/o timeout"
+    r"|tls handshake timeout"
+    r"|context deadline exceeded"
+    r"|\bno such host\b"
+    r"|server misbehaving"
+    r"|temporary failure in name resolution"
+    r"|network is unreachable"
+    r"|host is unreachable"
+    r"|\bunexpected eof\b"
+    r"|\bEOF\b"
+    r"|bad gateway"
+    r"|service unavailable"
+    r"|gateway time-?out"
+    r"|\bslow ?down\b"
+    r"|\binternalerror\b"
+    r"|\brequesttimeout\b"
+    r"|too many requests"
+    r"|\b(429|500|502|503|504)\b",
+    re.IGNORECASE,
+)
+MC_AUTH_RE = re.compile(
+    r"\baccess ?denied\b"
+    r"|invalidaccesskeyid"
+    r"|signaturedoesnotmatch"
+    r"|expiredtoken"
+    r"|invalidtoken"
+    r"|token has expired"
+    r"|permission denied"
+    r"|\b(401|403)\b",
+    re.IGNORECASE,
+)
+MC_NOT_FOUND_RE = re.compile(
+    r"nosuchkey"
+    r"|nosuchbucket"
+    r"|nosuchversion"
+    r"|no such object"
+    r"|does not exist"
+    r"|\bnot found\b"
+    r"|\b404\b",
+    re.IGNORECASE,
+)
+
+
+def first_line(text):
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if line:
+            return line[:400]
+    return ""
+
+
+def classify_mc_error(returncode, output):
+    """Classify one `mc` invocation.
+
+    Returns "ok", "transport", "auth", "not-found" or "unknown".
+
+    Only "transport" is retried. A missing object or a rejected credential is a
+    deterministic answer: retrying it just delays the report by half a minute
+    and hides the real cause behind four more identical lines.
+    """
+    if returncode == 0:
+        return "ok"
+    text = output or ""
+    if MC_TRANSPORT_RE.search(text):
+        return "transport"
+    if MC_AUTH_RE.search(text):
+        return "auth"
+    if MC_NOT_FOUND_RE.search(text):
+        return "not-found"
+    return "unknown"
+
+
+def retry_delay(attempt, rng=None):
+    """Seconds to wait after a failed attempt (0-based). Jittered +/- MC_JITTER."""
+    base = MC_BACKOFF[min(max(attempt, 0), len(MC_BACKOFF) - 1)]
+    r = rng if rng is not None else random
+    return base * (1.0 - MC_JITTER + 2.0 * MC_JITTER * r.random())
+
+
 def ensure_mc(endpoint):
     osn = os.environ.get("RUNNER_OS") or platform.system()
     arch = os.environ.get("RUNNER_ARCH") or platform.machine()
@@ -228,13 +328,42 @@ class Store(object):
         mask(creds.get("SessionToken", ""))
         return creds["AccessKeyId"], creds["SecretAccessKey"], creds.get("SessionToken", "")
 
-    def run(self, *args, check=True):
+    # Set by run(); read by callers that need to word an error correctly.
+    last_error_kind = "ok"
+    last_attempts = 0
+
+    def run(self, *args, check=True, attempts=None):
+        """Run one `mc` command, retrying transport failures only.
+
+        Both verbs this action uses are safe to repeat: `mc cp` writes a whole
+        object under a key derived from the run, and `mc ls` is read-only.
+        """
+        attempts = MC_ATTEMPTS if attempts is None else max(1, int(attempts))
         cmd = [self.mc, "--config-dir", self.cfg, "--no-color", "--disable-pager"] + list(args)
-        p = subprocess.run(cmd, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        out = p.stdout.decode("utf-8", "replace")
-        if check and p.returncode != 0:
-            fail("mc %s failed (exit %d):\n%s" % (args[0], p.returncode, out.strip()))
-        return p.returncode, out
+        rc, out, kind = 1, "", "unknown"
+        for attempt in range(attempts):
+            p = subprocess.run(cmd, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            rc = p.returncode
+            out = p.stdout.decode("utf-8", "replace")
+            kind = classify_mc_error(rc, out)
+            self.last_error_kind = kind
+            self.last_attempts = attempt + 1
+            if kind == "ok":
+                return rc, out
+            if kind != "transport" or attempt == attempts - 1:
+                break
+            delay = retry_delay(attempt)
+            warn(
+                "mc %s: transport error, retrying in %.1fs (attempt %d of %d): %s"
+                % (args[0], delay, attempt + 2, attempts, first_line(out))
+            )
+            time.sleep(delay)
+        if check:
+            fail(
+                "mc %s failed after %d attempt(s) (exit %d, %s error):\n%s"
+                % (args[0], self.last_attempts, rc, kind, out.strip())
+            )
+        return rc, out
 
     def target(self, key):
         return "devino/%s/%s" % (self.bucket, key)
@@ -440,6 +569,27 @@ def safe_extract(archive, dest):
     return len(members)
 
 
+def download_error_message(name, bucket, key, kind, attempts, output):
+    """Word a failed download after its real cause.
+
+    A genuine 404 keeps the familiar "Artifact not found". Anything else leads
+    with `mc`'s own text, because announcing a TCP reset as a missing artifact
+    sends whoever reads the annotation looking for an upload that exists and
+    succeeded.
+    """
+    detail = (output or "").strip()
+    if kind == "not-found":
+        return "Artifact not found: %s (s3://%s/%s)\n%s" % (name, bucket, key, detail)
+    label = {
+        "transport": "transport error reaching the storage endpoint",
+        "auth": "authorization error",
+    }.get(kind, "mc error")
+    return (
+        "Could not download artifact %s (s3://%s/%s) after %d attempt(s) — %s, "
+        "not a missing artifact:\n%s" % (name, bucket, key, attempts, label, detail)
+    )
+
+
 def do_download():
     name = inp("name", "").strip()
     pattern = inp("pattern", "").strip()
@@ -478,7 +628,7 @@ def do_download():
         local = os.path.join(work, n + ".tgz")
         rc, out = store.run("cp", "--quiet", store.target(key), local, check=False)
         if rc != 0:
-            fail("Artifact not found: %s (s3://%s/%s)\n%s" % (n, store.bucket, key, out.strip()))
+            fail(download_error_message(n, store.bucket, key, store.last_error_kind, store.last_attempts, out))
         target = dest if (name or merge) else dest / n
         count = safe_extract(local, target)
         log("Downloaded %s (%s, %d entries) to %s" % (n, human(os.path.getsize(local)), count, target))

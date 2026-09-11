@@ -51,6 +51,21 @@ up to 1/3/5/7/14/30/90 days and stored as an object tag (values above 90 are
 capped at 90). When `retention-days` is not set the artifact expires after
 14 days, which matches how the org's test reports and screenshots are used.
 
+## Transient failures
+
+Every `mc` call is retried when it fails for a transport reason — connection
+reset, refused or timed out, TLS handshake timeout, DNS failure, or a 5xx from
+the endpoint. Five attempts, exponential backoff (2, 4, 8, 16 s) with +/- 25%
+jitter. Both verbs are safe to repeat: `cp` writes a whole object under a key
+derived from the run, and `ls` is read-only.
+
+A real 404 (`NoSuchKey`, "object does not exist") and a rejected credential are
+**never** retried — they are deterministic answers, so retrying only delays the
+report. The download step also words its error after the real cause: only a
+genuine 404 says `Artifact not found`. Anything else leads with `mc`'s own
+message, so a network failure is not mistaken for an upload that never
+happened.
+
 ## Inputs
 
 `upload`: `name`, `path`, `if-no-files-found`, `retention-days`,
