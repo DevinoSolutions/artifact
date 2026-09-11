@@ -150,16 +150,20 @@ MC_TRANSPORT_RE = re.compile(
     r"|temporary failure in name resolution"
     r"|network is unreachable"
     r"|host is unreachable"
-    r"|\bunexpected eof\b"
-    r"|\bEOF\b"
+    r"|unexpected eof"
+    r"|:\s*EOF\b"
     r"|bad gateway"
     r"|service unavailable"
     r"|gateway time-?out"
+    r"|internal server error"
     r"|\bslow ?down\b"
     r"|\binternalerror\b"
     r"|\brequesttimeout\b"
     r"|too many requests"
-    r"|\b(429|500|502|503|504)\b",
+    # A bare status code is only a status code when something says so. The
+    # object key is echoed in mc's error text, so an artifact literally named
+    # "coverage-503" must not be read as a 503.
+    r"|(?:status|code|responded with|returned)\s*[:=]?\s*(?:429|500|502|503|504)\b",
     re.IGNORECASE,
 )
 MC_AUTH_RE = re.compile(
@@ -170,7 +174,9 @@ MC_AUTH_RE = re.compile(
     r"|invalidtoken"
     r"|token has expired"
     r"|permission denied"
-    r"|\b(401|403)\b",
+    r"|\bforbidden\b"
+    r"|\bunauthorized\b"
+    r"|(?:status|code|responded with|returned)\s*[:=]?\s*(?:401|403)\b",
     re.IGNORECASE,
 )
 MC_NOT_FOUND_RE = re.compile(

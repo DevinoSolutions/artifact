@@ -96,6 +96,8 @@ class TestClassify(unittest.TestCase):
             "mc: <ERROR> Put https://s/: EOF",
             "mc: <ERROR> 503 Service Unavailable",
             "mc: <ERROR> 502 Bad Gateway",
+            "mc: <ERROR> server responded with 503",
+            "mc: <ERROR> status code: 504",
             "mc: <ERROR> Please reduce your request rate. SlowDown",
             "mc: <ERROR> We encountered an internal error, please try again: InternalError",
             "mc: <ERROR> write: broken pipe",
@@ -128,6 +130,30 @@ class TestClassify(unittest.TestCase):
         # that fired on "no such" would misread it. Ordering guard.
         text = "mc: <ERROR> dial tcp: lookup storage.devino.ca: no such host"
         self.assertEqual(main.classify_mc_error(1, text), "transport")
+
+    def test_digits_in_an_artifact_name_are_not_status_codes(self):
+        # mc echoes the object key, so a bare numeric rule would read these as
+        # 5xx and retry a missing object five times under the wrong label.
+        for name in ("coverage-503", "shard-502", "e2e-500", "build-429", "run-504"):
+            text = (
+                "mc: <ERROR> Unable to validate source "
+                "`devino/gh-artifacts/o/r/1/%s.tgz`. Object does not exist." % name
+            )
+            self.assertEqual(main.classify_mc_error(1, text), "not-found", name)
+
+    def test_digits_in_an_artifact_name_are_not_auth_codes(self):
+        for name in ("coverage-403", "smoke-401"):
+            text = (
+                "mc: <ERROR> Unable to validate source "
+                "`devino/gh-artifacts/o/r/1/%s.tgz`. Object does not exist." % name
+            )
+            self.assertEqual(main.classify_mc_error(1, text), "not-found", name)
+
+    def test_socket_details_are_not_status_codes(self):
+        # The observed reset carries ports and IPs; none of them is an HTTP code.
+        self.assertEqual(main.classify_mc_error(1, RESET), "transport")
+        quiet = "mc: <ERROR> Unable to stat `devino/gh-artifacts/o/r/500/a.tgz`. Object does not exist."
+        self.assertEqual(main.classify_mc_error(1, quiet), "not-found")
 
     def test_unrecognised_failure_is_unknown(self):
         self.assertEqual(main.classify_mc_error(1, "mc: <ERROR> something new"), "unknown")
