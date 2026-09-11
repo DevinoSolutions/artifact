@@ -590,9 +590,12 @@ def download_error_message(name, bucket, key, kind, attempts, output):
         "transport": "transport error reaching the storage endpoint",
         "auth": "authorization error",
     }.get(kind, "mc error")
+    # ASCII only: fail() prints to stdout, and on Windows that is the console
+    # code page (cp1252 before Python 3.15), so a non-ASCII character here would
+    # raise UnicodeEncodeError inside the error path itself.
     return (
-        "Could not download artifact %s (s3://%s/%s) after %d attempt(s) — %s, "
-        "not a missing artifact:\n%s" % (name, bucket, key, attempts, label, detail)
+        "Could not download artifact %s (s3://%s/%s) after %d attempt(s): %s, "
+        "not a missing artifact.\n%s" % (name, bucket, key, attempts, label, detail)
     )
 
 

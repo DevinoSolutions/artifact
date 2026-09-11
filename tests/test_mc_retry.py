@@ -328,6 +328,14 @@ class TestDownloadErrorMessage(unittest.TestCase):
         self.assertNotIn("Artifact not found", msg)
         self.assertIn("authorization error", msg)
 
+    def test_every_message_is_ascii_encodable(self):
+        # fail() prints to stdout. On Windows that is cp1252 before Python 3.15,
+        # so a stray em-dash would raise UnicodeEncodeError inside the error
+        # path and replace a useful message with a traceback.
+        for kind in ("not-found", "transport", "auth", "unknown"):
+            msg = main.download_error_message("a", "b", "k", kind, 5, RESET)
+            msg.encode("ascii")  # raises on any non-ASCII character
+
     def test_unknown_failure_still_shows_mc_output_first(self):
         msg = main.download_error_message("a", "b", "k", "unknown", 1, "mc: <ERROR> weird")
         self.assertNotIn("Artifact not found", msg)
