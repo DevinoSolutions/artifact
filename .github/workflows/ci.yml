@@ -10,14 +10,30 @@ permissions:
   contents: read
   id-token: write
 
+# Without this, every push to every branch started a full run that nothing
+# superseded: this workflow uploads and downloads a 130 MiB fixture per Linux
+# job, so redundant runs are not free even on hosted runners. Group name
+# matches the org's prevailing ci.yml style; main is exempt from cancellation
+# so a push there always finishes validating.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   roundtrip:
     name: roundtrip (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
+      # GitHub-hosted only. This repository is public, and the org's only
+      # self-hosted runner group (Default) sets allows_public_repositories:
+      # false, so a job asking for `ubuntu-devino` here can never be assigned
+      # and queues forever. That restriction is deliberate and should stay:
+      # letting a public repo onto self-hosted runners exposes them to fork
+      # pull requests. The Linux pool path is exercised continuously anyway by
+      # the 51 consumer upload steps that run this action on `ubuntu-devino`.
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest, ubuntu-devino]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -123,7 +139,11 @@ jobs:
   cross-job:
     name: cross-job download
     needs: roundtrip
-    runs-on: ubuntu-devino
+    # Was `ubuntu-devino`; moved to a hosted runner for the reason given on the
+    # roundtrip matrix above. What this job actually tests is that one job can
+    # fetch artifacts uploaded by *other* jobs on *other* operating systems,
+    # which does not depend on where this job itself runs.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Download every single-* artifact from all OSes
@@ -131,10 +151,22 @@ jobs:
         with:
           pattern: single-*
           path: all
-      - name: Verify all four
+      - name: Verify all three
         shell: bash
         run: |
           ls -la all
-          for os in ubuntu-latest windows-latest macos-latest ubuntu-devino; do
+          for os in ubuntu-latest windows-latest macos-latest; do
             test -f "all/single-$os/a.txt" || { echo "missing $os"; exit 1; }
           done
+
+  unit:
+    # Pure-python, mocks subprocess: no network, no mc, no OIDC, no runner pool.
+    name: unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run unit tests
+        shell: bash
+        run: |
+          PY="$(command -v python3 || command -v python)"
+          "$PY" -m unittest discover -s tests -p "test_*.py" -v
