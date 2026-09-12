@@ -268,11 +268,17 @@ def ensure_mc(endpoint):
     if not want:
         fail("No pinned sha256 for mc %s on %s; refusing to install an unverified binary" % (MC_VERSION, key))
     # Sources in order of preference: the org mirror, then the two public
-    # copies. The mirror is populated and normally serves this build -- it did
-    # as recently as 2026-09-12T00:37Z (this repo's own CI, run 34662229884) --
-    # but storage.devino.ca is misrouted as of 2026-09-12: every path, including
-    # /minio/health/live, answers 404 from some other application, so the mirror
-    # is unreachable rather than empty.
+    # copies. The mirror is populated and is normally the source that answers.
+    #
+    # On 2026-09-12 it did not. The Docker daemon on the storage host restarted
+    # around 05:00Z; the shared MinIO compose has no `restart:` policy, so its
+    # container stayed exited (255) while every other app on the host came back.
+    # With no container, Traefik had no router for storage.devino.ca and the
+    # requests fell through to another app, which 404s every MinIO path --
+    # including /minio/health/live -- and answers with that app's headers. The
+    # same failure appears twice in this service's deploy history as "Redeploy
+    # shared MinIO - was returning 404". Starting the container restored it at
+    # 08:10Z. So the mirror was down, not empty, and the 404 was a symptom.
     #
     # dl.min.io is gone for good: 410 Gone for every mc release since
     # 2026-09-11/12 ("the MinIO Client project is archived ... these files are
@@ -282,9 +288,9 @@ def ensure_mc(endpoint):
     # archived github.com/minio/mc repository are the last public copy of this
     # build, so they go last: a fallback, not something to depend on.
     #
-    # TODO: restore the storage.devino.ca route (owner action). This third URL
-    # only un-breaks the download step; STS and every `mc cp`/`mc ls` in this
-    # file still go to that host, so the action cannot work until it is back.
+    # TODO: add `restart: unless-stopped` to the shared-minio compose (owner
+    # action) so a daemon restart cannot take the mirror -- and with it STS and
+    # every `mc cp`/`mc ls` in this file -- down until someone notices.
     urls = [
         "%s/tools/mc/%s/%s/%s" % (endpoint.rstrip("/"), MC_VERSION, key, binname),
         "https://dl.min.io/client/mc/release/%s/archive/mc.%s" % (key, MC_VERSION),

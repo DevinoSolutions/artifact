@@ -46,7 +46,8 @@ to GitHub's blob store. This action writes to devino instead.
    `dl.min.io` has answered `410 Gone` since 2026-09-11/12 — MinIO archived the
    client and stopped serving those files. The org mirror is populated and is
    normally the source that answers, so the third entry exists for the case
-   where it is not reachable. Re-pin `MC_SHA256` from each release's
+   where the mirror itself is down: with the secondary retired there is no
+   longer anything behind it. Re-pin `MC_SHA256` from each release's
    `.sha256sum` asset whenever `MC_VERSION` changes.
 3. Upload: matched files are packed into one `.tgz` whose root mirrors
    upstream semantics (a single directory uploads its contents; several
