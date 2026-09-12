@@ -268,16 +268,23 @@ def ensure_mc(endpoint):
     if not want:
         fail("No pinned sha256 for mc %s on %s; refusing to install an unverified binary" % (MC_VERSION, key))
     # Sources in order of preference: the org mirror, then the two public
-    # copies. dl.min.io is gone -- it has answered 410 Gone for every mc release
-    # since 2026-09-11/12 ("the MinIO Client project is archived ... these files
-    # are no longer served from this site"), which is what took every consumer
-    # job in the org down. The release assets of the archived github.com/minio/mc
-    # repository are the last public copy of this build, so they go last as a
-    # fallback rather than as something to depend on.
-    # TODO: populate the org mirror at
-    # storage.devino.ca/tools/mc/<MC_VERSION>/<key>/<binname> (owner action --
-    # the objects are not there today, the first URL 404s) so the primary source
-    # is org-controlled again and neither public source is on the critical path.
+    # copies. The mirror is populated and normally serves this build -- it did
+    # as recently as 2026-09-12T00:37Z (this repo's own CI, run 34662229884) --
+    # but storage.devino.ca is misrouted as of 2026-09-12: every path, including
+    # /minio/health/live, answers 404 from some other application, so the mirror
+    # is unreachable rather than empty.
+    #
+    # dl.min.io is gone for good: 410 Gone for every mc release since
+    # 2026-09-11/12 ("the MinIO Client project is archived ... these files are
+    # no longer served from this site"). The mirror being down and the secondary
+    # being retired on the same day left no source at all, which is what took
+    # every consumer job in the org down here. The release assets of the
+    # archived github.com/minio/mc repository are the last public copy of this
+    # build, so they go last: a fallback, not something to depend on.
+    #
+    # TODO: restore the storage.devino.ca route (owner action). This third URL
+    # only un-breaks the download step; STS and every `mc cp`/`mc ls` in this
+    # file still go to that host, so the action cannot work until it is back.
     urls = [
         "%s/tools/mc/%s/%s/%s" % (endpoint.rstrip("/"), MC_VERSION, key, binname),
         "https://dl.min.io/client/mc/release/%s/archive/mc.%s" % (key, MC_VERSION),
