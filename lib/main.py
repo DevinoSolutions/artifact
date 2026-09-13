@@ -30,6 +30,24 @@ import urllib.parse
 import urllib.request
 
 MC_VERSION = "RELEASE.2025-08-13T08-35-41Z"
+# sha256 of the pinned `mc` binary for each supported platform. Every download,
+# from whichever source, is checked against this table before it is installed:
+# the primary source is an org-controlled bucket and the last resort is an
+# archived third-party repository, so the pin is what makes the three sources
+# interchangeable instead of three different trust levels.
+#
+# Taken on 2026-09-12 from the `.sha256sum` asset published next to each binary
+# on the archived upstream release
+# https://github.com/minio/mc/releases/tag/RELEASE.2025-08-13T08-35-41Z
+# (e.g. mc.linux-amd64.RELEASE.2025-08-13T08-35-41Z.sha256sum). Re-pin these
+# whenever MC_VERSION changes.
+MC_SHA256 = {
+    "linux-amd64": "01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891",
+    "linux-arm64": "14c8c9616cfce4636add161304353244e8de383b2e2752c0e9dad01d4c27c12c",
+    "darwin-amd64": "2862c79cce11b09be9a8911a279b2e9465bebf74b9f01abca9c348a0d795f0cb",
+    "darwin-arm64": "a877fd0c183409da9f20f9d6e1811987298bbbca1aa03428eebdffba79fb9445",
+    "windows-amd64": "c8db13ebeda31497f354c0e950809db0ae9b2a2a69b8afee68c128c37300c157",
+}
 DEFAULT_ENDPOINT = "https://storage.devino.ca"
 DEFAULT_BUCKET = "gh-artifacts"
 # MinIO maps the token's repository_owner_id claim to a policy of the same name
@@ -246,24 +264,66 @@ def ensure_mc(endpoint):
     if dest.is_file():
         return str(dest)
     dest_dir.mkdir(parents=True, exist_ok=True)
+    want = MC_SHA256.get(key)
+    if not want:
+        fail("No pinned sha256 for mc %s on %s; refusing to install an unverified binary" % (MC_VERSION, key))
+    # Sources in order of preference: the org mirror, then the two public
+    # copies. The mirror is populated and is normally the source that answers.
+    #
+    # On 2026-09-12 it did not. The Docker daemon on the storage host restarted
+    # around 05:00Z; the shared MinIO compose has no `restart:` policy, so its
+    # container stayed exited (255) while every other app on the host came back.
+    # With no container, Traefik had no router for storage.devino.ca and the
+    # requests fell through to another app, which 404s every MinIO path --
+    # including /minio/health/live -- and answers with that app's headers. The
+    # same failure appears twice in this service's deploy history as "Redeploy
+    # shared MinIO - was returning 404". Starting the container restored it at
+    # 08:10Z. So the mirror was down, not empty, and the 404 was a symptom.
+    #
+    # dl.min.io is gone for good: 410 Gone for every mc release since
+    # 2026-09-11/12 ("the MinIO Client project is archived ... these files are
+    # no longer served from this site"). The mirror being down and the secondary
+    # being retired on the same day left no source at all, which is what took
+    # every consumer job in the org down here. The release assets of the
+    # archived github.com/minio/mc repository are the last public copy of this
+    # build, so they go last: a fallback, not something to depend on.
+    #
+    # TODO: add `restart: unless-stopped` to the shared-minio compose (owner
+    # action) so a daemon restart cannot take the mirror -- and with it STS and
+    # every `mc cp`/`mc ls` in this file -- down until someone notices.
     urls = [
         "%s/tools/mc/%s/%s/%s" % (endpoint.rstrip("/"), MC_VERSION, key, binname),
         "https://dl.min.io/client/mc/release/%s/archive/mc.%s" % (key, MC_VERSION),
+        "https://github.com/minio/mc/releases/download/%s/mc.%s.%s%s"
+        % (MC_VERSION, key, MC_VERSION, ".exe" if osn == "Windows" else ""),
     ]
     tmp = dest_dir / ("%s.%d.tmp" % (binname, os.getpid()))
-    last = None
+    errors = []
     for url in urls:
         try:
             data = http(urllib.request.Request(url), timeout=180)
+            got = hashlib.sha256(data).hexdigest()
+            if got != want:
+                # Never install it, and do not stop: the next source may be
+                # intact. A wrong binary is a worse outcome than no binary.
+                errors.append(
+                    (url, "sha256 mismatch: expected %s, got %s (%d bytes)" % (want, got, len(data)))
+                )
+                continue
             with open(str(tmp), "wb") as f:
                 f.write(data)
             os.chmod(str(tmp), 0o755)
             os.replace(str(tmp), str(dest))
-            log("Installed mc %s from %s" % (MC_VERSION, url))
+            log("Installed mc %s from %s (sha256 %s verified)" % (MC_VERSION, url, got))
             return str(dest)
         except Exception as e:  # noqa: BLE001
-            last = e
-    fail("Could not download the MinIO client: %s" % last)
+            errors.append((url, str(e) or repr(e)))
+    # Name every source with its own error. When only the last one was reported,
+    # a 410 from dl.min.io read as if the org mirror had never been consulted.
+    fail(
+        "Could not download the MinIO client %s for %s; all %d source(s) failed:\n%s"
+        % (MC_VERSION, key, len(urls), "\n".join("  %s: %s" % (u, m) for u, m in errors))
+    )
 
 
 class Store(object):

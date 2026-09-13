@@ -35,8 +35,20 @@ to GitHub's blob store. This action writes to devino instead.
    MinIO STS (`AssumeRoleWithWebIdentity`) for one-hour credentials. MinIO picks the policy named after the token's
    `repository_owner_id` claim, so only workflows owned by DevinoSolutions get
    access; tokens from any other owner map to no policy and are refused.
-2. A pinned `mc` (MinIO client) is fetched from `storage.devino.ca/tools/`
-   (fallback: dl.min.io) and cached in the runner tool cache.
+2. A pinned `mc` (MinIO client) is fetched from `storage.devino.ca/tools/` and
+   cached in the runner tool cache. Two fallbacks follow the org mirror:
+   `dl.min.io`, and the release assets of the archived `github.com/minio/mc`
+   repository. Whichever source answers, the bytes are checked against the
+   per-platform sha256 pinned in `lib/main.py` (`MC_SHA256`) before the binary
+   is installed; a mismatch is never installed and the next source is tried.
+   If every source fails, the error names each URL with its own reason.
+
+   `dl.min.io` has answered `410 Gone` since 2026-09-11/12 — MinIO archived the
+   client and stopped serving those files. The org mirror is populated and is
+   normally the source that answers, so the third entry exists for the case
+   where the mirror itself is down: with the secondary retired there is no
+   longer anything behind it. Re-pin `MC_SHA256` from each release's
+   `.sha256sum` asset whenever `MC_VERSION` changes.
 3. Upload: matched files are packed into one `.tgz` whose root mirrors
    upstream semantics (a single directory uploads its contents; several
    paths share their least common ancestor), then copied to
