@@ -23,6 +23,7 @@ jobs:
   roundtrip:
     name: roundtrip (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       # GitHub-hosted only. This repository is public, and the org's only
@@ -144,6 +145,7 @@ jobs:
     # fetch artifacts uploaded by *other* jobs on *other* operating systems,
     # which does not depend on where this job itself runs.
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Download every single-* artifact from all OSes
@@ -163,6 +165,7 @@ jobs:
     # Pure-python, mocks subprocess: no network, no mc, no OIDC, no runner pool.
     name: unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Run unit tests
