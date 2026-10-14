@@ -28,7 +28,7 @@ or a full commit SHA. Each release's full notes are on its GitHub Release.
 
 ## v1.1.0 (2026-09-02, `739b3ab`)
 
-- Adds a 90-day retention bucket.
+- Adds a 90-day retention bucket; an unset `retention-days` now expires after 14 days (#1).
 
 ## v1.0.0 (2026-09-02, `31a7d9f`)
 
