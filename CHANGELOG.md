@@ -12,6 +12,15 @@ or a full commit SHA. Each release's full notes are on its GitHub Release.
   two. The one visible difference is the wording of a failed download that is not a 404 (see
   v1.2.0).
 
+## Unreleased
+
+- The GitHub OIDC token fetch and the MinIO STS exchange now retry for about 2 minutes on the
+  same jittered 2/4/8/16/32 s schedule as `mc`, instead of 3 attempts over about 12 s. Only HTTP
+  429, HTTP 5xx and connection errors or timeouts are retried; any other 4xx fails at once as
+  before. Each retry logs one line naming the attempt and the reason. A GitHub-side 503 that
+  lasted past the old budget failed uploads in two runs of
+  DevinoSolutions/stealth-chrome-devtools-mcp (39956132580, 40398194992).
+
 ## v1.2.1 (2026-09-13, `44df166`)
 
 - The `mc` client download falls back to the `minio/mc` GitHub release assets after the org
