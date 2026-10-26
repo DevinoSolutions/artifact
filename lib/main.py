@@ -20,6 +20,8 @@ import platform
 import random
 import re
 import shutil
+import socket
+import ssl
 import subprocess
 import sys
 import tarfile
@@ -133,6 +135,10 @@ def temp_dir():
 
 USER_AGENT = "devino-artifact/1.0 (+https://github.com/DevinoSolutions/artifact)"
 
+# Errors a budgeted http() call treats as transient (see http()).
+HTTP_TRANSIENT = (ConnectionError, TimeoutError, socket.timeout, socket.gaierror)
+HTTP_MIN_TIMEOUT = 5  # floor for the per-attempt timeout as a budget runs down
+
 
 def http(req, timeout=120, retries=3, budget=None, what=None):
     """GET/POST `req`, retrying HTTP 429, 5xx and connection errors.
@@ -149,18 +155,32 @@ def http(req, timeout=120, retries=3, budget=None, what=None):
     start = time.monotonic()
     attempt = 0
     while True:
+        attempt_timeout = timeout
+        if budget is not None:
+            # Keep one stalled attempt from running far past the budget.
+            attempt_timeout = min(timeout, max(HTTP_MIN_TIMEOUT, budget - (time.monotonic() - start)))
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with urllib.request.urlopen(req, timeout=attempt_timeout) as r:
                 return r.read()
         except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", "replace")
+            try:
+                body = e.read().decode("utf-8", "replace")
+            except Exception:  # noqa: BLE001 - a stalled body must not hide the status
+                body = ""
             last = "HTTP %s: %s" % (e.code, body[:800])
             reason = "HTTP %s" % e.code
             if 400 <= e.code < 500 and e.code != 429:
                 break
         except Exception as e:  # noqa: BLE001
             last = repr(e)
-            reason = "%s: %s" % (type(e).__name__, str(getattr(e, "reason", e))[:100])
+            cause = getattr(e, "reason", e)
+            reason = "%s: %s" % (type(e).__name__, str(cause)[:100])
+            # With a budget only connection and timeout errors are transient;
+            # a certificate failure or a bug will not fix itself.
+            if budget is not None and not (
+                isinstance(cause, HTTP_TRANSIENT) and not isinstance(cause, ssl.SSLError)
+            ):
+                break
         attempt += 1
         if budget is None:
             if attempt >= retries:

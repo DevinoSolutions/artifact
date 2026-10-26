@@ -13,6 +13,8 @@ import contextlib
 import importlib.util
 import io
 import os
+import socket
+import ssl
 import unittest
 import urllib.error
 from unittest import mock
@@ -40,6 +42,16 @@ def http_error(code):
     return urllib.error.HTTPError("https://x.invalid/", code, "msg", {}, io.BytesIO(b"upstream"))
 
 
+class StalledBody(object):
+    """An HTTPError body whose read times out."""
+
+    def read(self, *args):
+        raise TimeoutError("timed out")
+
+    def close(self):
+        pass
+
+
 class FakeResponse(object):
     def __init__(self, data):
         self.data = data
@@ -61,8 +73,10 @@ class FakeUrlopen(object):
     def __init__(self, *script):
         self.script = list(script)
         self.calls = 0
+        self.timeouts = []
 
     def __call__(self, req, timeout=None):
+        self.timeouts.append(timeout)
         item = self.script[min(self.calls, len(self.script) - 1)]
         self.calls += 1
         if isinstance(item, BaseException):
@@ -149,12 +163,58 @@ class TestOidcFetch(unittest.TestCase):
         self.assertEqual(urlopen.calls, 3)
 
     def test_urlerror_then_success(self):
-        err = urllib.error.URLError(OSError("Temporary failure in name resolution"))
+        err = urllib.error.URLError(socket.gaierror(-3, "Temporary failure in name resolution"))
         with harness(err, OIDC_OK, STS_XML) as (store, urlopen, clock, buf):
             creds = store.credentials()
         self.assertEqual(creds[0], "AKID")
         self.assertEqual(urlopen.calls, 3)
-        self.assertIn("attempt 1 failed (URLError: Temporary failure in name resolution)", buf.getvalue())
+        self.assertIn("attempt 1 failed (URLError: [Errno -3] Temporary failure in name resolution)", buf.getvalue())
+
+    def test_certificate_failure_gets_one_attempt(self):
+        err = urllib.error.URLError(ssl.SSLCertVerificationError(1, "certificate verify failed"))
+        with harness(err) as (store, urlopen, clock, buf):
+            with self.assertRaises(SystemExit):
+                store.credentials()
+        self.assertEqual(urlopen.calls, 1)
+        self.assertEqual(clock.sleeps, [])
+        self.assertNotIn("retrying", buf.getvalue())
+
+    def test_value_error_gets_one_attempt(self):
+        with harness(ValueError("bad url")) as (store, urlopen, clock, _):
+            with self.assertRaises(SystemExit):
+                store.credentials()
+        self.assertEqual(urlopen.calls, 1)
+        self.assertEqual(clock.sleeps, [])
+
+    def test_timeout_and_connection_errors_raised_directly_are_retried(self):
+        for err in (TimeoutError("timed out"), ConnectionResetError("reset")):
+            with harness(err, OIDC_OK, STS_XML) as (store, urlopen, clock, _):
+                self.assertEqual(store.credentials()[0], "AKID")
+            self.assertEqual(urlopen.calls, 3)
+
+    def test_stalled_5xx_body_is_still_retried(self):
+        stalled = urllib.error.HTTPError("https://x.invalid/", 503, "msg", {}, StalledBody())
+        with harness(stalled, OIDC_OK, STS_XML) as (store, urlopen, clock, buf):
+            self.assertEqual(store.credentials()[0], "AKID")
+        self.assertEqual(urlopen.calls, 3)
+        self.assertIn("attempt 1 failed (HTTP 503)", buf.getvalue())
+
+    def test_stalled_403_body_still_fails_at_once(self):
+        stalled = urllib.error.HTTPError("https://x.invalid/", 403, "msg", {}, StalledBody())
+        with harness(stalled) as (store, urlopen, clock, _):
+            with self.assertRaises(SystemExit):
+                store.credentials()
+        self.assertEqual(urlopen.calls, 1)
+
+    def test_attempt_timeout_shrinks_as_the_budget_runs_down(self):
+        with harness(http_error(503)) as (store, urlopen, clock, _):
+            with self.assertRaises(SystemExit):
+                store.credentials()
+        timeouts = urlopen.timeouts
+        self.assertEqual(timeouts[0], 60)
+        self.assertEqual(timeouts, sorted(timeouts, reverse=True))
+        self.assertLess(timeouts[-1], 60)
+        self.assertGreaterEqual(min(timeouts), main.HTTP_MIN_TIMEOUT)
 
 
 class TestStsExchange(unittest.TestCase):
@@ -181,7 +241,7 @@ class TestStsExchange(unittest.TestCase):
         self.assertEqual(clock.sleeps, [])
 
     def test_urlerror_then_success(self):
-        with harness(OIDC_OK, urllib.error.URLError("dns"), STS_XML) as (store, urlopen, clock, _):
+        with harness(OIDC_OK, urllib.error.URLError(socket.gaierror(-2, "dns")), STS_XML) as (store, urlopen, clock, _):
             creds = store.credentials()
         self.assertEqual(creds[0], "AKID")
         self.assertEqual(urlopen.calls, 3)
