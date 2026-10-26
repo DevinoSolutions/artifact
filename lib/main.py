@@ -69,6 +69,11 @@ MC_ATTEMPTS = 5
 MC_BACKOFF = [2, 4, 8, 16, 32]
 MC_JITTER = 0.25  # +/- 25%, so a fleet-wide blip does not retry in lockstep
 
+# The OIDC token fetch and the STS exchange gate every job, and a GitHub-side
+# 503 has outlasted the short default http() retry (two failed runs in three
+# days). They retry on the MC_BACKOFF schedule for about this many seconds.
+CREDENTIAL_BUDGET = 120
+
 
 # ── GitHub Actions helpers ───────────────────────────────────────────────────
 def log(msg):
@@ -129,23 +134,45 @@ def temp_dir():
 USER_AGENT = "devino-artifact/1.0 (+https://github.com/DevinoSolutions/artifact)"
 
 
-def http(req, timeout=120, retries=3):
+def http(req, timeout=120, retries=3, budget=None, what=None):
+    """GET/POST `req`, retrying HTTP 429, 5xx and connection errors.
+
+    Default: `retries` attempts, waiting 2, 4, 6 s. With `budget` (seconds) it
+    instead retries on the jittered MC_BACKOFF schedule until the next wait
+    would pass the budget, so a GitHub-side 503 that lasts a minute is waited
+    out. `what` names the call in the one line each retry logs.
+    """
     if isinstance(req, str):
         req = urllib.request.Request(req)
     req.add_header("User-Agent", USER_AGENT)
     last = None
-    for attempt in range(retries):
+    start = time.monotonic()
+    attempt = 0
+    while True:
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return r.read()
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", "replace")
             last = "HTTP %s: %s" % (e.code, body[:800])
+            reason = "HTTP %s" % e.code
             if 400 <= e.code < 500 and e.code != 429:
                 break
         except Exception as e:  # noqa: BLE001
             last = repr(e)
-        time.sleep(2 * (attempt + 1))
+            reason = "%s: %s" % (type(e).__name__, str(getattr(e, "reason", e))[:100])
+        attempt += 1
+        if budget is None:
+            if attempt >= retries:
+                break
+            delay = 2 * attempt
+        else:
+            delay = retry_delay(attempt - 1)
+            if time.monotonic() - start + delay > budget:
+                break
+        if what:
+            log("%s: attempt %d failed (%s); retrying in %.0fs" % (what, attempt, reason, delay))
+        time.sleep(delay)
     raise RuntimeError(last)
 
 
@@ -361,7 +388,7 @@ class Store(object):
             headers={"Authorization": "bearer " + tok, "Accept": "application/json; api-version=2.0"},
         )
         try:
-            jwt = json.loads(http(req, timeout=60).decode("utf-8"))["value"]
+            jwt = json.loads(http(req, timeout=60, budget=CREDENTIAL_BUDGET, what="GitHub OIDC token").decode("utf-8"))["value"]
         except Exception as e:  # noqa: BLE001
             fail("Could not obtain the GitHub OIDC token: %s" % e)
         params = {
@@ -377,7 +404,7 @@ class Store(object):
             self.endpoint + "/", data=data, headers={"Content-Type": "application/x-www-form-urlencoded"}
         )
         try:
-            body = http(req, timeout=60)
+            body = http(req, timeout=60, budget=CREDENTIAL_BUDGET, what="MinIO STS exchange")
         except Exception as e:  # noqa: BLE001
             fail("MinIO STS AssumeRoleWithWebIdentity failed: %s" % e)
         # The STS reply is a tiny, fixed-shape XML document from our own
