@@ -10,6 +10,7 @@ DevinoSolutions/stealth-chrome-devtools-mcp runs 39956132580 and 40398194992,
 and a DNS URLError against the STS endpoint on 2026-10-20.
 """
 import contextlib
+import errno
 import importlib.util
 import io
 import os
@@ -163,12 +164,27 @@ class TestOidcFetch(unittest.TestCase):
         self.assertEqual(urlopen.calls, 3)
 
     def test_urlerror_then_success(self):
-        err = urllib.error.URLError(socket.gaierror(-3, "Temporary failure in name resolution"))
+        err = urllib.error.URLError(OSError("Temporary failure in name resolution"))
         with harness(err, OIDC_OK, STS_XML) as (store, urlopen, clock, buf):
             creds = store.credentials()
         self.assertEqual(creds[0], "AKID")
         self.assertEqual(urlopen.calls, 3)
-        self.assertIn("attempt 1 failed (URLError: [Errno -3] Temporary failure in name resolution)", buf.getvalue())
+        self.assertIn("attempt 1 failed (URLError: Temporary failure in name resolution)", buf.getvalue())
+
+    def test_gaierror_is_retried(self):
+        err = urllib.error.URLError(socket.gaierror(-3, "Temporary failure in name resolution"))
+        with harness(err, OIDC_OK, STS_XML) as (store, urlopen, clock, _):
+            self.assertEqual(store.credentials()[0], "AKID")
+        self.assertEqual(urlopen.calls, 3)
+
+    def test_network_and_host_unreachable_are_retried(self):
+        # Python raises both as a plain OSError, not a ConnectionError.
+        for code, text in ((errno.ENETUNREACH, "Network is unreachable"), (errno.EHOSTUNREACH, "No route to host")):
+            for err in (urllib.error.URLError(OSError(code, text)), OSError(code, text)):
+                with harness(err, OIDC_OK, STS_XML) as (store, urlopen, clock, _):
+                    self.assertEqual(store.credentials()[0], "AKID")
+                self.assertEqual(urlopen.calls, 3, repr(err))
+                self.assertEqual(len(clock.sleeps), 1)
 
     def test_certificate_failure_gets_one_attempt(self):
         err = urllib.error.URLError(ssl.SSLCertVerificationError(1, "certificate verify failed"))
@@ -241,7 +257,7 @@ class TestStsExchange(unittest.TestCase):
         self.assertEqual(clock.sleeps, [])
 
     def test_urlerror_then_success(self):
-        with harness(OIDC_OK, urllib.error.URLError(socket.gaierror(-2, "dns")), STS_XML) as (store, urlopen, clock, _):
+        with harness(OIDC_OK, urllib.error.URLError(OSError("dns")), STS_XML) as (store, urlopen, clock, _):
             creds = store.credentials()
         self.assertEqual(creds[0], "AKID")
         self.assertEqual(urlopen.calls, 3)

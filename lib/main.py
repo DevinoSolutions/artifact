@@ -20,7 +20,6 @@ import platform
 import random
 import re
 import shutil
-import socket
 import ssl
 import subprocess
 import sys
@@ -135,8 +134,11 @@ def temp_dir():
 
 USER_AGENT = "devino-artifact/1.0 (+https://github.com/DevinoSolutions/artifact)"
 
-# Errors a budgeted http() call treats as transient (see http()).
-HTTP_TRANSIENT = (ConnectionError, TimeoutError, socket.timeout, socket.gaierror)
+# Errors a budgeted http() call treats as transient (see http()). Every
+# connection, timeout and DNS failure is an OSError, and so are ENETUNREACH and
+# EHOSTUNREACH, which Python raises as a plain OSError. ssl.SSLError is an
+# OSError too and is excluded where this is used: a bad certificate is not a blip.
+HTTP_TRANSIENT = (OSError,)
 HTTP_MIN_TIMEOUT = 5  # floor for the per-attempt timeout as a budget runs down
 
 
