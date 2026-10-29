@@ -105,6 +105,28 @@ class TestClassify(unittest.TestCase):
         ):
             self.assertEqual(main.classify_mc_error(1, text), "transport", text)
 
+    def test_cloudflare_origin_errors_are_transport(self):
+        # Observed 2026-10-29 (DevinoSolutions/stealth-chrome-devtools-mcp run
+        # 40937037630): read as "unknown", so the download gave up after 1 attempt.
+        observed = "mc.exe: <ERROR> Unable to prepare URL for copying. error code 520"
+        self.assertEqual(main.classify_mc_error(1, observed), "transport")
+        for code in (520, 521, 522, 523, 524):
+            text = "mc: <ERROR> server responded with %d" % code
+            self.assertEqual(main.classify_mc_error(1, text), "transport", text)
+
+    def test_tls_setup_and_not_implemented_are_not_retried(self):
+        for code in (501, 525, 526):
+            text = "mc: <ERROR> server responded with %d" % code
+            self.assertEqual(main.classify_mc_error(1, text), "unknown", text)
+
+    def test_digits_in_an_artifact_name_are_not_cloudflare_codes(self):
+        for name in ("coverage-520", "shard-524"):
+            text = (
+                "mc: <ERROR> Unable to validate source "
+                "`devino/gh-artifacts/o/r/1/%s.tgz`. Object does not exist." % name
+            )
+            self.assertEqual(main.classify_mc_error(1, text), "not-found", name)
+
     def test_missing_object_is_not_found(self):
         for text in (
             MISSING,
