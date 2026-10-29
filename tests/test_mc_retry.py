@@ -11,6 +11,7 @@ which a passing upload reported as "Artifact not found".
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import sys
 import tempfile
@@ -159,6 +160,32 @@ class TestClassify(unittest.TestCase):
             url = "https://storage.devino.ca/" + urllib.parse.quote(path.split("/", 1)[1], safe="/")
             text = "mc: <ERROR> Get %s: Object does not exist." % url
             self.assertEqual(main.classify_mc_error(1, text, [path]), "not-found", text)
+
+    def test_an_echo_without_the_alias_is_still_removed(self):
+        # mc or the server may print bucket/key without "devino/"; the suffix
+        # form removes it even when the name holds a space.
+        path = "devino/gh-artifacts/o/r/1/x code520.tgz"
+        text = "mc: <ERROR> Unable to stat gh-artifacts/o/r/1/x code520.tgz. Object does not exist."
+        self.assertEqual(main.classify_mc_error(1, text, [path]), "not-found")
+
+    def test_listed_entries_are_not_read(self):
+        # `mc ls --json`: a listed key is an object name, not mc's words.
+        prefix = "devino/gh-artifacts/o/r/1/"
+        out = "\n".join((
+            json.dumps({"status": "success", "type": "file", "key": "code520.tgz"}),
+            json.dumps({"status": "success", "type": "file", "key": "connection reset.tgz"}),
+            json.dumps({"status": "error", "error": {"message": "Unable to list folder.",
+                                                     "cause": {"message": "Access Denied."}}}),
+        ))
+        self.assertEqual(main.classify_mc_error(1, out, [prefix]), "auth")
+        out = json.dumps({"status": "error", "error": {"message": "read tcp: connection reset by peer"}})
+        self.assertEqual(main.classify_mc_error(1, out, [prefix]), "transport")
+
+    def test_a_short_path_tail_does_not_erase_mc_words(self):
+        # A run id "i" makes ".../r/i/" a path; its tail "i/" must not eat "i/o".
+        path = "devino/gh-artifacts/o/r/i/"
+        text = "mc: <ERROR> Unable to list `%s`: read tcp: i/o timeout" % path
+        self.assertEqual(main.classify_mc_error(1, text, [path]), "transport")
 
     def test_a_path_named_like_mc_words_does_not_erase_them(self):
         path = "devino/gh-artifacts/o/r/1/connection"
