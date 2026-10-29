@@ -276,7 +276,26 @@ def first_line(text):
     return ""
 
 
-def classify_mc_error(returncode, output):
+def echoed_forms(paths):
+    """Every form in which mc may echo one of the paths it was given.
+
+    Each path, every suffix of it that still holds a "/" (mc or the server may
+    drop the alias or the bucket), and their percent-encoded forms (a server
+    URL), longest first so a shorter form never splits a longer one. A bare
+    basename is not a form: an artifact named "connection" must not erase
+    mc's own "connection reset".
+    """
+    forms = set()
+    for path in paths:
+        parts = path.split("/")
+        for i in range(len(parts)):
+            tail = "/".join(parts[i:])
+            if i == 0 or "/" in tail:
+                forms.update((tail, urllib.parse.quote(tail, safe="/")))
+    return sorted(forms, key=len, reverse=True)
+
+
+def classify_mc_error(returncode, output, paths=()):
     """Classify one `mc` invocation.
 
     Returns "ok", "transport", "auth", "not-found" or "unknown".
@@ -284,13 +303,19 @@ def classify_mc_error(returncode, output):
     Only "transport" is retried. A missing object or a rejected credential is a
     deterministic answer: retrying it just delays the report by half a minute
     and hides the real cause behind four more identical lines.
+
+    `paths` are the path arguments mc was given. mc echoes them, and an
+    artifact may be named anything ("code520", "a`b", "access denied"), so
+    every echoed form of them is removed before any rule reads the text: only
+    mc's own words are classified. MC_ECHOED_PATH_RE then drops any other
+    quoted path or URL the server echoed.
     """
     if returncode == 0:
         return "ok"
-    # mc echoes the object path, and an artifact may be named anything, e.g.
-    # "code520" or "access denied". Only mc's own words are classified: drop
-    # backtick-quoted paths and path-like tokens first (MC_ECHOED_PATH_RE).
-    text = MC_ECHOED_PATH_RE.sub(" ", output or "")
+    text = output or ""
+    for form in echoed_forms(paths):
+        text = text.replace(form, " ")
+    text = MC_ECHOED_PATH_RE.sub(" ", text)
     if MC_TRANSPORT_RE.search(text):
         return "transport"
     if MC_AUTH_RE.search(text):
@@ -473,7 +498,7 @@ class Store(object):
             p = subprocess.run(cmd, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             rc = p.returncode
             out = p.stdout.decode("utf-8", "replace")
-            kind = classify_mc_error(rc, out)
+            kind = classify_mc_error(rc, out, [a for a in args if "/" in a or "\\" in a])
             self.last_error_kind = kind
             self.last_attempts = attempt + 1
             if kind == "ok":

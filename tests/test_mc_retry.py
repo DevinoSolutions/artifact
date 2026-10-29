@@ -15,6 +15,7 @@ import os
 import sys
 import tempfile
 import unittest
+import urllib.parse
 from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -146,6 +147,24 @@ class TestClassify(unittest.TestCase):
         )
         self.assertEqual(main.classify_mc_error(1, path_named_like_auth), "not-found")
 
+    def test_any_echoed_artifact_path_is_not_read(self):
+        # Artifact names may hold backticks, spaces and quotes. The classifier
+        # removes the exact paths mc was given, so no name can steer it.
+        for name in ("a`code520", "x code520", 'q"error code 503', "status 429 b`c"):
+            path = "devino/gh-artifacts/o/r/1/%s.tgz" % name
+            for reason, want in (("Object does not exist.", "not-found"), ("Access Denied.", "auth")):
+                for echo in ("`%s`" % path, '"%s"' % path, path):
+                    text = "mc: <ERROR> Unable to validate source %s. %s" % (echo, reason)
+                    self.assertEqual(main.classify_mc_error(1, text, [path]), want, text)
+            url = "https://storage.devino.ca/" + urllib.parse.quote(path.split("/", 1)[1], safe="/")
+            text = "mc: <ERROR> Get %s: Object does not exist." % url
+            self.assertEqual(main.classify_mc_error(1, text, [path]), "not-found", text)
+
+    def test_a_path_named_like_mc_words_does_not_erase_them(self):
+        path = "devino/gh-artifacts/o/r/1/connection"
+        text = "mc: <ERROR> Unable to copy `%s`: read: connection reset by peer" % path
+        self.assertEqual(main.classify_mc_error(1, text, [path]), "transport")
+
     def test_missing_object_is_not_found(self):
         for text in (
             MISSING,
@@ -270,6 +289,18 @@ class TestStoreRun(unittest.TestCase):
         with harness((1, MISSING)) as (store, runner, sleeps, buf):
             with self.assertRaises(SystemExit):
                 store.run("cp", "--quiet", "src", "dst")
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual(sleeps, [])
+        self.assertIn("not-found error", buf.getvalue())
+
+    def test_run_hands_its_paths_to_the_classifier(self):
+        # A missing artifact whose name reads like a 520 is still never retried:
+        # run() passes the paths it gave mc, so the echo is not classified.
+        path = "devino/gh-artifacts/o/r/1/a`code520.tgz"
+        echo = "mc: <ERROR> Unable to validate source `%s`. Object does not exist." % path
+        with harness((1, echo)) as (store, runner, sleeps, buf):
+            with self.assertRaises(SystemExit):
+                store.run("cp", "--quiet", path, "dst")
         self.assertEqual(len(runner.calls), 1)
         self.assertEqual(sleeps, [])
         self.assertIn("not-found error", buf.getvalue())
