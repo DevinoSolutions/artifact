@@ -262,6 +262,12 @@ MC_NOT_FOUND_RE = re.compile(
 )
 
 
+# A "`...`"-quoted path, or a bare token with at least two "/" (a URL or object
+# path; "i/o timeout" and "net/http:" are mc's own words and stay). A token's
+# trailing ":" is kept, so "Put https://s/: EOF" still reads ": EOF".
+MC_ECHOED_PATH_RE = re.compile(r"`[^`]*`|\S*/\S*/[^\s:]*")
+
+
 def first_line(text):
     for line in (text or "").splitlines():
         line = line.strip()
@@ -281,7 +287,10 @@ def classify_mc_error(returncode, output):
     """
     if returncode == 0:
         return "ok"
-    text = output or ""
+    # mc echoes the object path, and an artifact may be named anything, e.g.
+    # "code520" or "access denied". Only mc's own words are classified: drop
+    # backtick-quoted paths and path-like tokens first (MC_ECHOED_PATH_RE).
+    text = MC_ECHOED_PATH_RE.sub(" ", output or "")
     if MC_TRANSPORT_RE.search(text):
         return "transport"
     if MC_AUTH_RE.search(text):

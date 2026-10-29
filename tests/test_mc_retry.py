@@ -127,6 +127,25 @@ class TestClassify(unittest.TestCase):
             )
             self.assertEqual(main.classify_mc_error(1, text), "not-found", name)
 
+    def test_status_words_inside_an_echoed_path_are_not_read(self):
+        # An artifact name may itself say "code520" or "error code 503";
+        # only mc's own words outside the echoed path are classified.
+        for name in ("code520", "error code 520", "code503", "returned 502", "status 429"):
+            missing = (
+                "mc: <ERROR> Unable to validate source "
+                "`devino/gh-artifacts/o/r/1/%s.tgz`. Object does not exist." % name
+            )
+            self.assertEqual(main.classify_mc_error(1, missing), "not-found", name)
+            denied = "mc: <ERROR> Unable to stat `devino/gh-artifacts/o/r/1/%s.tgz`. Access Denied." % name
+            self.assertEqual(main.classify_mc_error(1, denied), "auth", name)
+        bare = "mc: <ERROR> Unable to stat s3://gh-artifacts/o/r/1/code520.tgz. Object does not exist."
+        self.assertEqual(main.classify_mc_error(1, bare), "not-found")
+        path_named_like_auth = (
+            "mc: <ERROR> Unable to stat `devino/gh-artifacts/o/r/1/access denied.tgz`. "
+            "Object does not exist."
+        )
+        self.assertEqual(main.classify_mc_error(1, path_named_like_auth), "not-found")
+
     def test_missing_object_is_not_found(self):
         for text in (
             MISSING,
