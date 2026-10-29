@@ -21,8 +21,9 @@ or a full commit SHA. Each release's full notes are on its GitHub Release.
   40937037630, attempt 1). 501, 525 and 526 are configuration answers and still fail at once,
   as does a missing object.
 - A failed `mc` call is classified on mc's own words only: the exact paths the action gave mc
-  (and their bucket/key and URL-encoded forms) are removed from the output first, then any
-  other quoted path or URL. An artifact named `code520`, ``a`code520`` or `access denied` can
+  (and their bucket/key forms) are removed where they stand as whole paths, a `ls --json`
+  listing's successful entries are dropped (an error record keeps only its error text), then
+  any other quoted path or URL is removed. An artifact named `code520`, ``a`code520`` or `access denied` can
   no longer turn a missing object into a retried transport error, or a denial into one.
 - The GitHub OIDC token fetch and the MinIO STS exchange now retry for about 2 minutes on the
   same jittered 2/4/8/16/32 s schedule as `mc`, instead of 3 attempts over about 12 s. Only HTTP

@@ -279,11 +279,11 @@ def first_line(text):
 def echoed_forms(paths):
     """Every form in which mc may echo one of the paths it was given.
 
-    Each path, every suffix of it that still holds a "/" (mc or the server may
-    drop the alias or the bucket), and their percent-encoded forms (a server
-    URL), longest first so a shorter form never splits a longer one. A bare
-    basename is not a form: an artifact named "connection" must not erase
-    mc's own "connection reset".
+    Each path and every suffix of it that still holds a "/" (mc or the server
+    may drop the alias or the bucket), longest first so a shorter form never
+    splits a longer one. A bare basename is not a form: an artifact named
+    "connection" must not erase mc's own "connection reset". A URL the server
+    echoes is MC_ECHOED_PATH_RE's job.
     """
     forms = set()
     for path in paths:
@@ -291,8 +291,49 @@ def echoed_forms(paths):
         for i in range(len(parts)):
             tail = "/".join(parts[i:])
             if i == 0 or "/" in tail:
-                forms.update((tail, urllib.parse.quote(tail, safe="/")))
+                forms.add(tail)
     return sorted(forms, key=len, reverse=True)
+
+
+# A form is removed only where it stands as a whole path: after the start, a
+# space, a quote, "(", "=" or "/", and before the end, a space, a quote or
+# punctuation. So a run id "i" (path ".../r/i/") never erases mc's "i/o timeout".
+_FORM_BEFORE = r"(?<![^\s`\"'(=/])"
+_FORM_AFTER = r"(?=$|[\s`\"'),;:.\]])"
+
+
+def mc_words(output):
+    """mc's own words in `output`, without the entries it listed.
+
+    `mc ls --json` prints one JSON record per line. A successful record names
+    an object, and an object may be named anything, so it is dropped; an error
+    record contributes only its "error" strings. Any other line is kept.
+    """
+    words = []
+    for line in (output or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("{"):
+            try:
+                record = json.loads(stripped)
+            except ValueError:
+                record = None
+            if isinstance(record, dict):
+                if record.get("status") != "error":
+                    continue
+                words.extend(_strings(record.get("error")))
+                continue
+        words.append(line)
+    return "\n".join(words)
+
+
+def _strings(value):
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _strings(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in _strings(v)]
+    return []
 
 
 def classify_mc_error(returncode, output, paths=()):
@@ -306,15 +347,16 @@ def classify_mc_error(returncode, output, paths=()):
 
     `paths` are the path arguments mc was given. mc echoes them, and an
     artifact may be named anything ("code520", "a`b", "access denied"), so
-    every echoed form of them is removed before any rule reads the text: only
-    mc's own words are classified. MC_ECHOED_PATH_RE then drops any other
-    quoted path or URL the server echoed.
+    every echoed form of them is removed before any rule reads the text, and
+    a listing's own entries are dropped (mc_words): only mc's own words are
+    classified. MC_ECHOED_PATH_RE then drops any other quoted path or URL the
+    server echoed.
     """
     if returncode == 0:
         return "ok"
-    text = output or ""
+    text = mc_words(output)
     for form in echoed_forms(paths):
-        text = text.replace(form, " ")
+        text = re.sub(_FORM_BEFORE + re.escape(form) + _FORM_AFTER, " ", text)
     text = MC_ECHOED_PATH_RE.sub(" ", text)
     if MC_TRANSPORT_RE.search(text):
         return "transport"
