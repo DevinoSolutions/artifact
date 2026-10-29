@@ -229,8 +229,12 @@ MC_TRANSPORT_RE = re.compile(
     r"|too many requests"
     # A bare status code is only a status code when something says so. The
     # object key is echoed in mc's error text, so an artifact literally named
-    # "coverage-503" must not be read as a 503.
-    r"|(?:status|code|responded with|returned)\s*[:=]?\s*(?:429|500|502|503|504)\b",
+    # "coverage-503" must not be read as a 503. 520-524 are the Cloudflare
+    # origin errors in front of the store (unknown error, origin down,
+    # connection timed out, origin unreachable, timeout); a 520 failed a whole
+    # stealth-chrome-devtools-mcp publish after 1 attempt (run 40937037630).
+    # 525/526 (TLS setup) and 501 are configuration answers and stay unknown.
+    r"|(?:status|code|responded with|returned)\s*[:=]?\s*(?:429|50[0234]|52[0-4])\b",
     re.IGNORECASE,
 )
 MC_AUTH_RE = re.compile(

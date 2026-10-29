@@ -14,6 +14,12 @@ or a full commit SHA. Each release's full notes are on its GitHub Release.
 
 ## Unreleased
 
+- A failed `mc` call whose output names a Cloudflare origin error (520, 521, 522, 523 or 524)
+  is now a transport error, retried on the usual schedule (5 attempts). Before, only 429, 500,
+  502, 503 and 504 counted, so `error code 520` read as unknown and a download gave up after 1
+  attempt: that failed a whole DevinoSolutions/stealth-chrome-devtools-mcp publish (run
+  40937037630, attempt 1). 501, 525 and 526 are configuration answers and still fail at once,
+  as does a missing object.
 - The GitHub OIDC token fetch and the MinIO STS exchange now retry for about 2 minutes on the
   same jittered 2/4/8/16/32 s schedule as `mc`, instead of 3 attempts over about 12 s. Only HTTP
   429, HTTP 5xx and connection errors or timeouts are retried; any other 4xx fails at once as
