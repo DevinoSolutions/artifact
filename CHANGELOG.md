@@ -22,7 +22,7 @@ or a full commit SHA. Each release's full notes are on its GitHub Release.
   as does a missing object.
 - A failed `mc` call is classified on mc's own words only: the exact paths the action gave mc
   (and their bucket/key forms) are removed where they stand as whole paths, a `ls --json`
-  listing's successful entries are dropped (an error record keeps only its error text), then
+  listing's successful entries are dropped (an error record keeps only its message and code fields, never the bucket, key or resource it names), then
   any other quoted path or URL is removed. An artifact named `code520`, ``a`code520`` or `access denied` can
   no longer turn a missing object into a retried transport error, or a denial into one.
 - The GitHub OIDC token fetch and the MinIO STS exchange now retry for about 2 minutes on the

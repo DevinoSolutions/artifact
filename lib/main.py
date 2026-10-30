@@ -326,11 +326,25 @@ def mc_words(output):
     return "\n".join(words)
 
 
+# The fields of an mc / S3 error record that hold mc's or the store's own words.
+# Everything else (BucketName, Key, Resource, RequestId, HostId ...) names the
+# object or the request, and an object may be named anything.
+_ERROR_WORD_FIELDS = frozenset(("message", "code"))
+
+
 def _strings(value):
+    """The diagnostic strings of an error record: the values of its message and
+    code fields, at any depth, and nothing that names the object."""
     if isinstance(value, str):
         return [value]
     if isinstance(value, dict):
-        return [s for v in value.values() for s in _strings(v)]
+        found = []
+        for key, item in value.items():
+            if isinstance(item, (dict, list)):
+                found.extend(_strings(item))
+            elif isinstance(item, str) and str(key).lower() in _ERROR_WORD_FIELDS:
+                found.append(item)
+        return found
     if isinstance(value, list):
         return [s for v in value for s in _strings(v)]
     return []
