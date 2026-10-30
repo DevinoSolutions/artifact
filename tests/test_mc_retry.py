@@ -181,6 +181,32 @@ class TestClassify(unittest.TestCase):
         out = json.dumps({"status": "error", "error": {"message": "read tcp: connection reset by peer"}})
         self.assertEqual(main.classify_mc_error(1, out, [prefix]), "transport")
 
+    def test_an_error_records_object_metadata_is_not_read(self):
+        # Only message/code fields are mc's words; BucketName, Key, Resource
+        # name the object (Codex round 4: bucket "code520" read as a 520).
+        for bucket in ("gh-artifacts", "code520"):
+            record = {
+                "status": "error",
+                "error": {
+                    "message": "Unable to list folder.",
+                    "cause": {
+                        "message": "Access Denied.",
+                        "error": {
+                            "Code": "AccessDenied",
+                            "Message": "Access Denied.",
+                            "BucketName": bucket,
+                            "Key": "o/r/1/status 503.tgz",
+                            "Resource": "/%s/o/r/1/" % bucket,
+                            "RequestId": "code 502",
+                        },
+                    },
+                },
+            }
+            got = main.classify_mc_error(1, json.dumps(record), ["devino/%s/o/r/1/" % bucket])
+            self.assertEqual(got, "auth", bucket)
+        slow = {"status": "error", "error": {"cause": {"error": {"Code": "SlowDown", "BucketName": "x"}}}}
+        self.assertEqual(main.classify_mc_error(1, json.dumps(slow)), "transport")
+
     def test_a_short_path_tail_does_not_erase_mc_words(self):
         # A run id "i" makes ".../r/i/" a path; its tail "i/" must not eat "i/o".
         path = "devino/gh-artifacts/o/r/i/"
